@@ -1,0 +1,438 @@
+---
+title: "Effects of COVID-19 on Employment in the United States"
+author:
+- "Dikshya Pandey^[STAT-612]"
+date: "December 9, 2020"
+output: beamer_presentation
+colortheme: "dolphin"
+fontsize: "10pt"
+mainfont: "serif"
+urlcolor: "blue"
+references:
+- id: cortesForsythe
+  type: article-journal
+  title: "The Heterogeneous Labor Market Impacts of the Covid-19 Pandemic"
+  author:
+  - family: "Cortes"
+    given: "Guido Matias"
+  - family: "Forsythe"
+    given: "Eliza C."
+  container-title: "Upjohn Institute Working Papers"
+  issue: 20-327
+  URL: "https://ssrn.com/abstract=3634715"
+  DOI: "https://dx.doi.org/10.2139/ssrn.3634715"
+  issued:
+    year: 2020
+    month: 5
+    day: 28
+  accessed:
+    year: 2020
+    month: 12
+    day: 6
+  language: "en"
+- id: dalton
+  type: article-journal
+  title: "Labor Market Effects of Local Spread of COVID-19"
+  author:
+  - family: "Dalton"
+    given: "Michael"
+  container-title: "BLS Working Papers"
+  issue: 524
+  URL: "https://www.bls.gov/osmr/research-papers/2020/pdf/ec200060.pdf"
+  issued:
+    year: 2020
+    month: 6
+    day: 5
+  accessed:
+    year: 2020
+    month: 12
+    day: 6
+  language: "en-US"
+- id: nbcnews
+  type: webpage
+  title: "The coronavirus has destroyed the job market in every state: See the per-state jobless numbers and how they’ve changed."
+  author:
+  - family: "Chiwaya"
+    given: "Nigel"
+  - family: "Wu"
+    given: "Jiachuan"
+  container-title: "NBC News"
+  URL: "https://www.nbcnews.com/business/economy/unemployment-claims-state-see-how-covid-19-has-destroyed-job-n1183686"
+  issued:
+    year: 2020
+    month: 8
+    day: 27
+  accessed:
+    year: 2020
+    month: 12
+    day: 6
+  language: "en-US"
+- id: bbcnews
+  type: webpage
+  title: "Coronavirus: Why are infections rising again in US?"
+  author:
+  - literal: "BBC News"
+  container-title: "BBC News"
+  URL: "https://www.bbc.com/news/election-us-2020-54423928"
+  issued:
+    year: 2020
+    month: 10
+    day: 08
+  accessed:
+    year: 2020
+    month: 12
+    day: 8
+  language: "en-US"
+- id: BLSNewsRelease
+  type: webpage
+  title: "The Employment Situation — April 2020"
+  author:
+  - literal: "Bureau of Labor Statistics"
+  container-title: "BLS News Release"
+  URL: "https://www.bls.gov/news.release/archives/empsit_05082020.pdf"
+  issued:
+    year: 2020
+    month: 05
+    day: 08
+  accessed:
+    year: 2020
+    month: 12
+    day: 8
+  language: "en-US"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r imports, eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+```
+
+```{r data, eval=TRUE, echo=FALSE, message=FALSE}
+COVID_AFFECTED_A <- c('Education and Health Services',
+                      'Government',
+                      'Leisure and Hospitality',
+                      'Professional and Business Services',
+                      'Retail Trade')
+COVID_UNAFFECTED_A <- c('Construction',
+                        'Durable Goods',
+                        'Financial Activities',
+                        'Information',
+                        'Mining and Logging',
+                        'Non-Durable Goods',
+                        'Other Services',
+                        'Transportation and Utilities')
+MONTHS <- c('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+
+data <- read.csv('./data/SeriesReport-20201127131812_4af1e7.csv', skip = 3)
+supersectorCodes <- read_tsv('./data/sm.supersector.tsv',
+                             col_types = cols(
+                               supersector_code = col_character(),
+                               supersector_name = col_character()
+                             ))
+data %>%
+  pivot_longer(cols = matches('([A-Z][a-z]{2})\\.([0-9]{4})'),
+               names_to = c('month', 'year'),
+               names_pattern = '([A-Z][a-z]{2})\\.([0-9]{4})',
+               values_to = 'value',
+               values_drop_na = TRUE) %>%
+  mutate(month = factor(month, levels = MONTHS, ordered = TRUE)) %>%
+  relocate(year, .before = month) %>%
+  mutate(supersectorCode = factor(str_sub(Series.ID, start = 4, end = 5))) %>%
+  pivot_wider(id_cols = c('month', 'year', 'supersectorCode'),
+              names_from = View.Description,
+              values_from = value) %>%
+  rename(employmentInThousands = `Original Data Value`,
+         annualNetChange = `12-Month Net Change`,
+         annualPercentChange = `12-Month Percent Change`) %>%
+  # See https://www.bls.gov/web/empsit/cestn.htm#section2a
+  filter(supersectorCode %in% c('10', '20', '31', '32', '41', '42', '43',
+                                '44', '50', '55', '60', '65', '70', '80',
+                                '90')) %>%
+  inner_join(supersectorCodes,
+             by = c('supersectorCode' = 'supersector_code')) %>%
+  rename(supersectorName = supersector_name) %>%
+  mutate(supersectorName = as.factor(supersectorName),
+         yearSupersectorID = as.factor(str_c(year, supersectorCode))) %>%
+  relocate(supersectorName, .after = month) %>%
+  filter(year == '2019' | year == '2020' & !(month %in% c('Nov', 'Dec'))) ->
+  cleanedData
+
+cleanedData %>%
+  filter(year == '2020') ->
+  oneYearData
+
+
+getTimeseriesBySupersectorName <- function (data, name) {
+  data %>%
+    filter(supersectorName == name) %>%
+    arrange(year, month) %>%
+    mutate(timeseriesSort = as.numeric(year) + (unclass(month) - 1) / 12) %>%
+    return()
+}
+
+plotTimeseriesBySupersectorName <- function (data, name) {
+  getTimeseriesBySupersectorName(data, name) %>%
+    as.data.frame() %>%
+    ggplot(aes(x = timeseriesSort, y = employmentInThousands)) +
+    geom_line(aes(group = supersectorName)) +
+    labs(x = 'Year', y = 'Employment In Thousands') +
+    scale_x_continuous(breaks = c(2019, 2020),
+                       minor_breaks = seq(2019, 2021, length.out = 25)) +
+     labs(caption = "(*At zoom level, these graphs are made to show the monthly trend)") +
+    ggtitle(str_c(name, ': Employment 2019 - 2020')) +
+    theme_bw() +
+    scale_color_viridis_d()
+}
+```
+
+
+## Executive Summary
+
+The COVID-19 pandemic has caused significant disruption to the U.S. economy. Using data from the Current Employment Statistics survey from BLS, we explore which major industry sectors in the United States saw a significant negative impact in their employment across the months of January to October 2020. 
+
+Using ANOVA, we compared the differences in employment between 2019 and 2020 for each month and for each major industry sector (or "supersector"). The fallout of the virus appears to have had a significant negative effect on the Leisure and Hospitality, Retail Trade, and Other Services supersectors.
+
+
+## Introduction
+
+According to NBC News, there have been high numbers of job losses and unemployment claims in less than no time: over 58 million unemployment claims were filed between March 14 and August 22 [@nbcnews].
+
+Therefore, we wanted to determine which industries had a significant negative impact on employment caused by COVID-19. Specifically, we ask _which supersectors had month-wise annual percent changes between 2019 and 2020 that significantly varied from the mean in each supersector_?
+
+
+## Dataset
+
+Our data is from the Current Employment Statistics (CES) program published by the United States Bureau of Labor Statistics (BLS).
+
+The data set consists of the following metrics: 
+
+- raw numeric value (employment in thousands)
+- the one-month net change
+- the 12-month net change
+- the 12-Month percent change
+
+
+```{r, echo=FALSE, fig.align = 'center', out.width="55%"}
+   knitr::include_graphics('./images/data.png')
+```
+
+## Data Preparation
+
+Given that the data we extracted was published by a well-known U.S. Federal government agency, there were minimal complications in preparing the data. 
+
+- We performed some minor transformations such as pivoting each series's month-year columns to a collection of rows keyed by series ID, data point name, its value, month, and year. 
+
+- To identify the supersector, we extracted the sub-string representing the supersector code from each series ID ^[https://www.bls.gov/web/empsit/cestn.htm#section2a]. 
+
+- We also created a TSV file that contains the list of supersector codes mapped to their names, which we joined to the main data frame. 
+
+## Our Data Set
+
+Original Data Set:
+```{r, echo=FALSE, fig.align = 'center', out.width="70%"}
+   knitr::include_graphics('./images/first_data.png')
+```
+Super Sector Code:
+```{r, echo=FALSE, fig.align = 'center', out.width="70%"}
+  knitr::include_graphics('./images/second_data.png')
+```
+Final Data Set:
+```{r, echo=FALSE, fig.align = 'center', out.width="70%"}
+ knitr::include_graphics('./images/third_data.png')
+```
+
+
+
+## Supersector Classification 
+
+We divided the supersectors into two groups based on whether we expected them to be significantly affected by COVID-19. 
+
+```{r, echo=FALSE, fig.align = 'center', out.width="100%"}
+   knitr::include_graphics('./images/Supersector_class.png')
+```
+
+
+## Literature 
+
+- The leisure and hospitality industry and the "other services" industry have had large employment declines across the nation; on the other hand, the finance and insurance industry is unaffected by the incidence of the virus, a fact the author contributes to that industry being widely amicable to telework [@dalton].
+
+- Another study finds similar effects due to industry, with the highest declines in employment in the leisure and hospitality sector and the education and health services sector, and lower declines in the agriculture, information, public administration, and mining sectors [@cortesForsythe].
+
+
+## Initial Hypotheses
+
+We analyzed the association of major industry sector ("supersector" in the BLS data) with annual net change in total employment.
+
+Our initial hypotheses were:
+
+1. the Transportation and Utilities supersector was significantly affected (in other words, is in the "Affected" group); and
+
+2. the Educational and Health Services supersector was not significantly affected (in other words, is not in the "Affected" group).
+
+
+## Most Affected Supersector: Leisure and Hospitality
+
+```{r, echo = FALSE,out.width = "100%", fig.align = "center", warning=FALSE}
+plotTimeseriesBySupersectorName(cleanedData, 'Leisure and Hospitality')
+```
+
+
+## Most Affected Supersector: Other Services
+
+```{r, echo = FALSE,out.width = "100%", fig.align = "center", warning=FALSE}
+plotTimeseriesBySupersectorName(cleanedData, 'Other Services')
+```
+
+
+## Least Affected Supersector: Financial Activities
+
+```{r, echo = FALSE,out.width = "100%", fig.align = "center", warning=FALSE}
+plotTimeseriesBySupersectorName(cleanedData, 'Financial Activities')
+```
+
+
+## Least Affected Supersector: Mining and Logging
+
+```{r, echo = FALSE,out.width = "100%", fig.align = "center", warning=FALSE}
+plotTimeseriesBySupersectorName(cleanedData, 'Mining and Logging')
+```
+
+
+## Box Plot Analysis
+
+```{r, out.width="100%", eval=TRUE, echo=FALSE, , message=FALSE, warning=FALSE}
+oneYearData %>%
+  mutate(supersectorName = fct_reorder(supersectorName,
+                                       desc(annualPercentChange))) %>%
+  ggplot(aes(x = annualPercentChange, y = supersectorName,
+             group = supersectorName)) +
+  geom_boxplot() +
+  labs(x = 'Annual Percent Change', y = 'Supersector') +
+  ggtitle('Annual percent change, between 2019 and 2020',
+          subtitle = 'By month and supersector') +
+  theme_bw() +
+  scale_color_viridis_d()
+```
+
+
+## Comparison of 2019 vs. 2020 - Original COVID Affected Group
+
+```{r,out.width="100%", eval=TRUE, echo=FALSE, message=FALSE}
+cleanedData %>%
+  filter(supersectorName %in% COVID_AFFECTED_A) %>% 
+  ggplot(aes(x = month, y = employmentInThousands, linetype = year,
+             color = supersectorName)) +
+  labs(title = 'Difference in Employment: 2019 vs. 2020',
+       subtitle = 'Original COVID Affected Group',
+       x = 'Month', y = 'Employment (in thousands)') +
+  geom_point() +
+  geom_smooth(aes(group = yearSupersectorID), formula = y ~ x, se = FALSE) +
+  theme_bw() +
+  scale_color_viridis_d()+
+  labs(caption = "(*At zoom level, these graphs are made to show the monthly trend)")
+```
+
+
+## Comparison of 2019 vs. 2020 - Original COVID Unaffected Group
+
+```{r,out.width="100%", eval=TRUE, echo=FALSE, message=FALSE}
+cleanedData %>%
+  filter(!(supersectorName %in% COVID_AFFECTED_A)) %>% 
+  ggplot(aes(x = month, y = employmentInThousands, linetype = year,
+             color = supersectorName)) +
+  labs(title = 'Difference in Employment: 2019 vs. 2020',
+       subtitle = 'Original COVID Unaffected Group',
+       x = 'Month', y = 'Employment (in thousands)') +
+  geom_point() +
+  geom_smooth(aes(group = yearSupersectorID), formula = y ~ x, se = FALSE) +
+  theme_bw() +
+  scale_color_viridis_d()+
+  labs(caption = "(*At zoom level, these graphs are made to show the monthly trend)")
+```
+
+## Analysis
+
+- First, in order to examine the effect of supersector on the 2020 monthly annual percent change, we compared the means of the two groups ("Affected" and "Unaffected") using one-way analysis of variance (ANOVA). We looked at annual percent change as a function of supersector to confirm that an effect existed
+
+```{r, eval=TRUE, echo=FALSE, message=FALSE, tidy=TRUE}
+options(width = 50)
+
+oneYearData %>%
+  mutate(covidAffected = supersectorName %in% COVID_AFFECTED_A) ->
+  oneYearData
+
+aov(annualPercentChange ~ supersectorName, data = oneYearData) %>%
+summary()
+```
+
+## Analysis (cont.)
+
+- Second, setting $\alpha < 0.05$, we ran another ANOVA on annual percent change as a function of being in the "Affected" group.
+
+```{r, eval=TRUE, echo=FALSE, message=FALSE, tidy=TRUE}
+options(width = 50)
+
+aov(annualPercentChange ~ covidAffected, data = oneYearData) %>%
+summary()
+```
+
+
+## Analysis (cont.)
+
+- Lastly, We created a new "Affeccted" group, this group consisted of the Leisure and Hospitality supersector, the Retail Trade supersector, and the Other Services supersector.
+
+```{r, eval=TRUE, echo=FALSE, message=FALSE}
+options(width = 50)
+
+COVID_AFFECTED_B <- c('Leisure and Hospitality',
+                      'Other Services',
+                      'Retail Trade')
+COVID_UNAFFECTED_B <- c('Construction',
+                        'Durable Goods',
+                        'Education and Health Services',
+                        'Financial Activities',
+                        'Government',
+                        'Information',
+                        'Mining and Logging',
+                        'Non-Durable Goods',
+                        'Professional and Business Services',
+                        'Transportation and Utilities')
+
+oneYearData %>%
+  mutate(covidAffected = supersectorName %in% COVID_AFFECTED_B) ->
+  oneYearData
+
+aov(annualPercentChange ~ covidAffected, data = oneYearData) %>%
+summary()
+```
+
+
+## Conclusions 
+
+We were able to show that the Leisure and Hospitality, Retail Trade, and Other Services supersectors displayed a significant effect on their monthly annual percent change values in 2020, relative to the other supersectors. 
+
+Returning to our initial hypotheses, we reject the first hypotheses that the Transportation and Utilities supersector is in the "Affected" group and find support for the second hypotheses, that the Educational and Health Services supersector is not in the "Affected" group. 
+
+
+## Summary
+
+
+In conclusion, COVID-19 virus has lead to a drastic change in the number of employment in different supersectors. In line with our literature review, we were able to support and conclude that the Leisure and Hospitality industry has been affected the most because of COVID-19. 
+
+Therefore, we reject our hypotheses of Transportation and Utilities supersector being in the "Affected" group. And, do not reject our second hypotheses of Educational and Health Services not being in the "Affected" group. 
+
+
+## Summary (cont.)
+
+Lastly, according to BBC news, the initial spike of COVID-19 happened in late March, with about 7.5 million COVID-19 cases [@bbcnews].
+
+A news released by BLS on April 2020 - "The Employment Situation", stated that in April 2020 the employment fell by 20.5 million, which is the largest over-the-month decline in the history. Therefore, employment fell sharply in all the major supersectors, with the largest decline in leisure and hospitality by 7.7 million (47%). [@BLSNewsRelease]
+
+
+## References
+
+::: {#refs}
+:::
